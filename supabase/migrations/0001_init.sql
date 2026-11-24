@@ -1,5 +1,6 @@
 -- Tiger Task — schéma initial
--- À coller dans Supabase > SQL Editor (ou `supabase db push`).
+-- À coller EN ENTIER dans Supabase > SQL Editor, sans rien sélectionner, puis Run.
+-- Le script peut être relancé sans risque.
 
 -- ------------------------------------------------------------
 -- Profils (statut premium, lien Stripe)
@@ -16,17 +17,19 @@ create table if not exists public.profiles (
 alter table public.profiles enable row level security;
 
 -- L'utilisateur lit son profil ; seul le webhook Stripe (clé service_role) peut l'écrire.
+drop policy if exists "profil lisible par son propriétaire" on public.profiles;
 create policy "profil lisible par son propriétaire"
   on public.profiles for select
   using (auth.uid() = id);
 
 -- Un profil est créé automatiquement à l'inscription
 create or replace function public.handle_new_user()
-returns trigger language plpgsql security definer set search_path = public as $$
+returns trigger language plpgsql security definer set search_path = public as $fn$
 begin
   insert into public.profiles (id) values (new.id) on conflict do nothing;
   return new;
-end $$;
+end;
+$fn$;
 
 drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
@@ -37,7 +40,7 @@ create trigger on_auth_user_created
 -- Horodatage serveur pour la synchronisation
 -- ------------------------------------------------------------
 create or replace function public.touch_synced_at()
-returns trigger language plpgsql as $$
+returns trigger language plpgsql as $fn$
 begin
   -- la modification la plus récente gagne : un appareil en retard n'écrase pas un plus récent
   if tg_op = 'UPDATE' and new.updated_at < old.updated_at then
@@ -45,7 +48,8 @@ begin
   end if;
   new.synced_at := now();
   return new;
-end $$;
+end;
+$fn$;
 
 -- ------------------------------------------------------------
 -- Rituels (tâches récurrentes)
@@ -65,12 +69,14 @@ create table if not exists public.rituals (
 
 create index if not exists rituals_user_synced on public.rituals (user_id, synced_at);
 
+drop trigger if exists rituals_synced_at on public.rituals;
 create trigger rituals_synced_at
   before insert or update on public.rituals
   for each row execute function public.touch_synced_at();
 
 alter table public.rituals enable row level security;
 
+drop policy if exists "rituels : propriétaire seulement" on public.rituals;
 create policy "rituels : propriétaire seulement"
   on public.rituals for all
   using (auth.uid() = user_id)
@@ -98,12 +104,14 @@ create table if not exists public.tasks (
 create index if not exists tasks_user_synced on public.tasks (user_id, synced_at);
 create index if not exists tasks_user_date on public.tasks (user_id, date);
 
+drop trigger if exists tasks_synced_at on public.tasks;
 create trigger tasks_synced_at
   before insert or update on public.tasks
   for each row execute function public.touch_synced_at();
 
 alter table public.tasks enable row level security;
 
+drop policy if exists "tâches : propriétaire seulement" on public.tasks;
 create policy "tâches : propriétaire seulement"
   on public.tasks for all
   using (auth.uid() = user_id)
